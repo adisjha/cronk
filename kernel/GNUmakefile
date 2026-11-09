@@ -119,7 +119,7 @@ override HEADER_DEPS := $(addprefix obj/,$(CFILES:.c=.c.d) $(ASFILES:.S=.S.d))
 
 # Default target. This must come first, before header dependencies.
 .PHONY: all
-all: bin/$(OUTPUT) bin/hello.cronk bin/counter.cronk
+all: bin/$(OUTPUT) bin/hello.cronk bin/counter.cronk bin/crash.cronk
 
 bin/%.cronk: ../programs/%.S GNUmakefile
 	mkdir -p bin obj/programs

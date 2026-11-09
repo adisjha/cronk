@@ -9,6 +9,22 @@ static void two_digits(struct limine_framebuffer *fb, unsigned value) {
     terminal_putchar(fb, '0' + value % 10);
 }
 
+static void percentage(struct limine_framebuffer *fb, uint64_t runtime, uint64_t period) {
+    if (!period) {
+        terminal_write(fb, "--");
+        return;
+    }
+    uint64_t tenths = (runtime * 1000 + period / 2) / period;
+    if (runtime && !tenths) {
+        terminal_write(fb, "<0.1%");
+        return;
+    }
+    terminal_write_uint(fb, tenths / 10);
+    terminal_putchar(fb, '.');
+    terminal_putchar(fb, '0' + tenths % 10);
+    terminal_putchar(fb, '%');
+}
+
 void program_view(struct limine_framebuffer *fb) {
     struct scheduler_sample before, now;
     scheduler_sample(&now);
@@ -32,25 +48,26 @@ void program_view(struct limine_framebuffer *fb) {
             two_digits(fb, now.seconds / 60 % 60);
             terminal_putchar(fb, ':');
             two_digits(fb, now.seconds % 60);
+            uint64_t period = now.timestamp - before.timestamp;
+            terminal_write(fb, "     CPU idle ");
+            percentage(fb, now.idle_runtime - before.idle_runtime, period);
             terminal_write(fb, "     Available RAM ");
             terminal_write_uint(fb, pages_stats().available * (PAGE_SIZE / 1024));
-            terminal_write(fb, " KiB\n\n    ID    CPU share    Task / last output\n");
+            terminal_write(fb, " KiB\n\n    ID    Ring    CPU share    Task / last output\n");
             bool present = false;
             for (unsigned i = 0; i < TASK_SLOTS; ++i)
                 if (now.tasks[i].id == selected) present = true;
             if (!present) selected = 1;
-            uint64_t period = now.ticks - before.ticks;
             for (unsigned i = 0; i < TASK_SLOTS; ++i) {
                 struct task_info *t = &now.tasks[i];
                 if (!t->id) continue;
                 terminal_write(fb, t->id == selected ? " >  " : "    ");
                 terminal_write_uint(fb, t->id);
                 terminal_write(fb, "     ");
-                if (period) {
-                    uint64_t prior = t->id == before.tasks[i].id ? before.tasks[i].slices : 0;
-                    terminal_write_uint(fb, ((t->slices - prior) * 100 + period / 2) / period);
-                    terminal_write(fb, "%");
-                } else terminal_write(fb, "--");
+                terminal_write_uint(fb, t->ring);
+                terminal_write(fb, "       ");
+                uint64_t prior = t->id == before.tasks[i].id ? before.tasks[i].runtime : 0;
+                percentage(fb, t->runtime - prior, period);
                 terminal_write(fb, "         ");
                 terminal_write(fb, t->name);
                 if (*t->output) {
@@ -59,7 +76,7 @@ void program_view(struct limine_framebuffer *fb) {
                 }
                 terminal_putchar(fb, '\n');
             }
-            terminal_write(fb, "\nCPU share = percentage of scheduler slices in the last sample.\n"
+            terminal_write(fb, "\nCPU share = share of elapsed time on the guest CPU in the last sample.\n"
                                "N next task   K stop selected background task   Q/F1 shell\n");
             terminal_end_refresh(fb);
             redraw = false;

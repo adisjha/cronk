@@ -86,7 +86,7 @@ kernel: kernel/.deps-obtained
 $(IMAGE_NAME).iso: limine-binary/limine kernel
 	rm -rf iso_root
 	mkdir -p iso_root/boot
-	cp -v kernel/bin/kernel kernel/bin/hello.cronk kernel/bin/counter.cronk iso_root/boot/
+	cp -v kernel/bin/kernel kernel/bin/hello.cronk kernel/bin/counter.cronk kernel/bin/crash.cronk iso_root/boot/
 	mkdir -p iso_root/boot/limine
 	cp -v limine.conf limine-binary/limine-bios.sys limine-binary/limine-bios-cd.bin limine-binary/limine-uefi-cd.bin iso_root/boot/limine/
 	mkdir -p iso_root/EFI/BOOT
@@ -107,7 +107,7 @@ $(IMAGE_NAME).hdd: limine-binary/limine kernel
 	./limine-binary/limine bios-install $(IMAGE_NAME).hdd
 	mformat -i $(IMAGE_NAME).hdd@@1M
 	mmd -i $(IMAGE_NAME).hdd@@1M ::/EFI ::/EFI/BOOT ::/boot ::/boot/limine
-	mcopy -i $(IMAGE_NAME).hdd@@1M kernel/bin/kernel kernel/bin/hello.cronk kernel/bin/counter.cronk ::/boot
+	mcopy -i $(IMAGE_NAME).hdd@@1M kernel/bin/kernel kernel/bin/hello.cronk kernel/bin/counter.cronk kernel/bin/crash.cronk ::/boot
 	mcopy -i $(IMAGE_NAME).hdd@@1M limine.conf limine-binary/limine-bios.sys ::/boot/limine
 	mcopy -i $(IMAGE_NAME).hdd@@1M limine-binary/BOOTX64.EFI ::/EFI/BOOT
 	mcopy -i $(IMAGE_NAME).hdd@@1M limine-binary/BOOTIA32.EFI ::/EFI/BOOT

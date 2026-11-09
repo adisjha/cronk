@@ -1,7 +1,7 @@
 #include "program.h"
 #include "storage/files.h"
 #include "mm/pages.h"
-#include "arch/x86_64/program_window.h"
+#include "arch/x86_64/user.h"
 #include "lib/memory.h"
 #include "term/terminal.h"
 
@@ -12,13 +12,8 @@ static volatile struct limine_module_request modules = {
 
 #include "sched/scheduler.h"
 
-typedef void (*write_fn)(void *, const char *);
-extern void program_enter(void *entry, void *stack_top, write_fn write, void *context);
-
 struct instance {
-    void *code;
-    unsigned char *stack, *window;
-    uint64_t *leaf, original;
+    struct user_space space;
     char name[32];
 };
 static struct instance instances[TASK_SLOTS];
@@ -31,6 +26,8 @@ void program_install(void) {
         for (const char *p = name; *p; ++p) if (*p == '/') name = p + 1;
         size_t len = 0;
         while (name[len]) ++len;
+        if (len == 11 && !memcmp(name, "crash.cronk", len))
+            files_install_program("crash.bin", 10, file->address, file->size);
         if (len == 11 && !memcmp(name, "hello.cronk", len))
             files_install_program("hello.bin", 8, file->address, file->size);
         if (len == 13 && !memcmp(name, "counter.cronk", len))
@@ -40,15 +37,14 @@ void program_install(void) {
 
 static void release(void *context) {
     struct instance *p = context;
-    if (p->leaf) program_window_set(p->window, p->leaf, p->original);
-    if (p->stack) pages_free(p->stack, 4);
-    if (p->code) pages_free(p->code, 1);
+    if (p->space.stack) pages_free(p->space.stack, 4);
+    if (p->space.code) pages_free(p->space.code, 1);
     *p = (struct instance){0};
 }
 
 static void background_main(void *context) {
     struct instance *p = context;
-    program_enter(p->window + 8, p->stack + 4 * PAGE_SIZE, scheduler_output, NULL);
+    user_execute(&p->space);
 }
 
 static void foreground_write(void *context, const char *text) {
@@ -57,29 +53,35 @@ static void foreground_write(void *context, const char *text) {
 
 void program_run(struct limine_framebuffer *fb, const char *name, const void *image,
                  size_t size, bool background) {
-    if (size <= 8 || size > PAGE_SIZE || memcmp(image, "CRONK001", 8)) {
+    if (size <= 8 || size > USER_WRITE - USER_CODE || memcmp(image, "CRONK001", 8)) {
         terminal_write(fb, "invalid executable\n");
         return;
     }
     unsigned slot = background ? 1 : 0;
-    while (slot < TASK_SLOTS && instances[slot].code) ++slot;
+    while (slot < TASK_SLOTS && instances[slot].space.code) ++slot;
     if (slot == TASK_SLOTS) {
         terminal_write(fb, "task table full\n");
         return;
     }
     struct instance *p = &instances[slot];
-    p->code = pages_alloc(1, PAGE_CODE);
-    p->stack = pages_alloc(4, PAGE_STACK);
-    p->window = program_page + slot * PAGE_SIZE;
-    if (p->code && p->stack) p->leaf = program_window_entry(p->window);
-    if (!p->leaf) {
+    p->space.code = pages_alloc(1, PAGE_CODE);
+    p->space.stack = pages_alloc(4, PAGE_STACK);
+    if (!p->space.code || !p->space.stack) {
         release(p);
-        terminal_write(fb, "unable to allocate or map program memory\n");
+        terminal_write(fb, "unable to allocate program memory\n");
         return;
     }
-    memcpy(p->code, image, size);
-    p->original = *p->leaf;
-    program_window_set(p->window, p->leaf, pages_physical(p->code) | 1);
+    memcpy(p->space.code, image, size);
+    // The original flat ABI calls write(context, string) and returns to exit.
+    // Both destinations now point to Ring 3 syscall stubs.
+    static const unsigned char write_stub[] = {0xb8,1,0,0,0,0xcd,0x80,0xc3};
+    static const unsigned char exit_stub[] = {0x31,0xc0,0xcd,0x80};
+    memcpy(p->space.code + (USER_WRITE - USER_CODE), write_stub, sizeof(write_stub));
+    memcpy(p->space.code + (USER_EXIT - USER_CODE), exit_stub, sizeof(exit_stub));
+    *(uintptr_t *)(p->space.stack + 4 * PAGE_SIZE - 8) = USER_EXIT;
+    p->space.write = background ? scheduler_output : foreground_write;
+    p->space.context = background ? NULL : fb;
+    user_space_init(&p->space, slot);
     if (background) {
         size_t n = 0;
         while (n + 1 < sizeof(p->name) && name[n]) ++n;
@@ -96,7 +98,13 @@ void program_run(struct limine_framebuffer *fb, const char *name, const void *im
         }
         terminal_write(fb, "task table full\n");
     } else {
-        program_enter(p->window + 8, p->stack + 4 * PAGE_SIZE, foreground_write, fb);
+        unsigned fault = user_execute(&p->space);
+        if (fault) {
+            terminal_write(fb, name);
+            terminal_write(fb, " stopped: ring 3 exception ");
+            terminal_write_uint(fb, fault - 1);
+            terminal_putchar(fb, '\n');
+        }
     }
     release(p);
 }

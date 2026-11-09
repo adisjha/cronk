@@ -1,4 +1,5 @@
 #include "scheduler.h"
+#include "arch/x86_64/user.h"
 #include "drivers/keyboard/keyboard.h"
 #include "arch/x86_64/clock.h"
 #include "arch/x86_64/io.h"
@@ -23,11 +24,27 @@ static struct task {
     void (*entry)(void *);
     void *context;
     void (*release)(void *);
+    struct user_space *user;
 } tasks[TASK_SLOTS + 1]; // Last slot has a dedicated idle stack.
 static unsigned char idle_stack[STACK_SIZE] __attribute__((aligned(16)));
 static unsigned char stacks[TASK_SLOTS-1][STACK_SIZE] __attribute__((aligned(16)));
 static unsigned current, next_id = 2;
 static volatile uint64_t ticks;
+static uint64_t accounted_at;
+
+// All accounting runs on the boot CPU with interrupts disabled. TSC units
+// cancel when runtime deltas are divided by the whole sampling interval.
+static uint64_t timestamp(void) {
+    uint32_t lo, hi;
+    asm volatile("lfence; rdtsc" : "=a"(lo), "=d"(hi) :: "memory");
+    return ((uint64_t)hi << 32) | lo;
+}
+
+static void account_current(void) {
+    uint64_t now = timestamp();
+    tasks[current].info.runtime += now - accounted_at;
+    accounted_at = now;
+}
 static volatile bool reap_pending;
 static bool waiting_for_input;
 
@@ -57,6 +74,14 @@ void scheduler_output(void *unused, const char *text) {
     out[n] = 0;
     asm volatile("sti" ::: "memory");
 }
+void scheduler_user(struct user_space *space) {
+    tasks[current].user = space;
+    tasks[current].info.ring = space ? 3 : 0;
+    user_switch(space);
+}
+
+extern uintptr_t exception_vectors[32];
+extern void syscall_irq(void);
 extern void scheduler_irq(void), keyboard_irq(void), yield_irq(void);
 
 static void idle(void) {
@@ -93,6 +118,10 @@ void scheduler_start(void) {
     asm volatile("cli" ::: "memory");
     uint16_t cs;
     asm volatile("mov %%cs,%0" : "=r"(cs));
+    user_cpu_init();
+    for (unsigned i = 0; i < 32; ++i) install_gate(i, exception_vectors[i], cs);
+    install_gate(128, (uintptr_t)syscall_irq, cs);
+    idt[128].flags = 0xee;
     install_gate(32, (uintptr_t)scheduler_irq, cs);
     install_gate(33, (uintptr_t)keyboard_irq, cs);
     install_gate(48, (uintptr_t)yield_irq, cs);
@@ -115,21 +144,25 @@ void scheduler_start(void) {
     outb(0x43, 0x34);
     outb(0x40, DIVISOR & 255);
     outb(0x40, DIVISOR >> 8);
+    accounted_at = timestamp();
     tasks[0].info = (struct task_info){.id = 1, .name = "shell"};
     asm volatile("sti" ::: "memory");
 }
 
 // Called with interrupts disabled and all general registers saved.
 uintptr_t scheduler_dispatch(uintptr_t sp) {
+    account_current();
     tasks[current].sp = sp;
     unsigned next = current == TASK_SLOTS ? 0 : (current + 1) % TASK_SLOTS;
     for (unsigned n = 0; n < TASK_SLOTS; ++n) {
         if (tasks[next].info.id && tasks[next].wake_tick <= ticks) {
             current = next;
+            user_switch(tasks[current].user);
             return tasks[current].sp;
         }
         next = (next + 1) % TASK_SLOTS;
     }
+    user_switch(NULL);
     current = TASK_SLOTS;
     return tasks[current].sp;
 }
@@ -179,7 +212,7 @@ unsigned scheduler_spawn(const char *name, void (*entry)(void *), void *context,
         if (tasks[i].info.id || tasks[i].release) continue;
         uintptr_t top = (uintptr_t)&stacks[i-1][STACK_SIZE] - 8;
         id = next_id++;
-        tasks[i] = (struct task){{.id = id, .name = name}, 0, initial_frame(top, task_main), entry, context, release};
+        tasks[i] = (struct task){{.id = id, .name = name}, 0, initial_frame(top, task_main), entry, context, release, NULL};
         break;
     }
     asm volatile("sti" ::: "memory");
@@ -216,7 +249,9 @@ uint64_t scheduler_seconds(void) {
 
 void scheduler_sample(struct scheduler_sample *sample) {
     asm volatile("cli" ::: "memory");
-    sample->ticks = ticks;
+    account_current();
+    sample->timestamp = accounted_at;
+    sample->idle_runtime = tasks[TASK_SLOTS].info.runtime;
     sample->seconds = scheduler_seconds();
     for (unsigned i = 0; i < TASK_SLOTS; ++i) sample->tasks[i] = tasks[i].info;
     asm volatile("sti" ::: "memory");

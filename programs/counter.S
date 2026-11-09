@@ -11,7 +11,8 @@ counter_entry:
     mov %rsi, %r13
     xor %r14d, %r14d
 1:
-    hlt
+    mov $2, %eax
+    int $0x80
     inc %r14
     lea 15(%rsp), %rsi
     movb $0, (%rsi)

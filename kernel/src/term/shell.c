@@ -62,12 +62,14 @@ static void shell_execute(struct limine_framebuffer *fb, char *cmd){
     } else if (starts_with(cmd, "rm ")) {
         files_command(fb, FILE_REMOVE, cmd + 3);
     } else if (streq(cmd, "ps")) {
-        terminal_write(fb, "ID   TASK   SLICES   LAST OUTPUT\n");
+        terminal_write(fb, "ID   RING   TASK   SLICES   LAST OUTPUT\n");
         for (unsigned i = 0; i < TASK_SLOTS; ++i) {
             struct task_info info;
             if (!scheduler_info(i, &info)) continue;
             terminal_write_uint(fb, info.id);
             terminal_write(fb, "   ");
+            terminal_write_uint(fb, info.ring);
+            terminal_write(fb, "     ");
             terminal_write(fb, info.name);
             terminal_write(fb, "   ");
             terminal_write_uint(fb, info.slices);

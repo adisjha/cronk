@@ -6,15 +6,18 @@
 struct task_info {
     unsigned id;
     const char *name;
-    uint64_t slices;
+    uint64_t slices, runtime;
+    unsigned ring;
     char output[40];
 };
 
 struct scheduler_sample {
     struct task_info tasks[TASK_SLOTS];
-    uint64_t ticks, seconds;
+    uint64_t timestamp, idle_runtime, seconds;
 };
 void scheduler_sample(struct scheduler_sample *sample);
+struct user_space;
+void scheduler_user(struct user_space *space);
 void scheduler_start(void);
 void scheduler_wait_input(void);
 void scheduler_sleep(unsigned ticks);

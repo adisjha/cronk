@@ -13,7 +13,6 @@ PHDRS
     text PT_LOAD;
     rodata PT_LOAD;
     data PT_LOAD;
-    program PT_LOAD FLAGS(5); /* Read/execute window for the active program frame. */
 }
 
 SECTIONS
@@ -66,12 +65,6 @@ SECTIONS
         *(.bss .bss.*)
         *(COMMON)
     } :data
-
-    . = ALIGN(CONSTANT(MAXPAGESIZE));
-    .program (NOLOAD) : {
-        program_page = .;
-        . += 8 * 4096; /* Foreground and seven background program windows. */
-    } :program
 
     /* Discard .note.* and .eh_frame* since they may cause issues on some hosts. */
     /DISCARD/ : {
