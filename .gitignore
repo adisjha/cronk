@@ -4,3 +4,4 @@
 *.hdd
 .DS_Store
 *.swp
+/cronk-data.img

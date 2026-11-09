@@ -119,7 +119,12 @@ override HEADER_DEPS := $(addprefix obj/,$(CFILES:.c=.c.d) $(ASFILES:.S=.S.d))
 
 # Default target. This must come first, before header dependencies.
 .PHONY: all
-all: bin/$(OUTPUT)
+all: bin/$(OUTPUT) bin/hello.cronk bin/counter.cronk
+
+bin/%.cronk: ../programs/%.S GNUmakefile
+	mkdir -p bin obj/programs
+	$(CC) $(CFLAGS) -c $< -o obj/programs/$*.o
+	$(LD) -m elf_x86_64 -Ttext=0 --oformat=binary -e $*_entry obj/programs/$*.o -o $@
 
 # Include header dependencies.
 -include $(HEADER_DEPS)

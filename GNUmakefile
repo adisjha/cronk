@@ -4,6 +4,11 @@
 # Default user QEMU flags. These are appended to the QEMU command calls.
 QEMUFLAGS := -m 2G
 
+DATA_DISK := cronk-data.img
+DATA_FLAGS = -device isa-ide,id=cronkide,iobase=0x1e8,iobase2=0x3ee,irq=11 \
+    -drive if=none,id=cronkdata,format=raw,file="$(DATA_DISK)" \
+    -device ide-hd,bus=cronkide.0,drive=cronkdata
+
 override IMAGE_NAME := template
 
 # Toolchain for building the 'limine' executable for the host.
@@ -20,36 +25,43 @@ all: $(IMAGE_NAME).iso
 all-hdd: $(IMAGE_NAME).hdd
 
 .PHONY: run
-run: $(IMAGE_NAME).iso
+run: $(IMAGE_NAME).iso $(DATA_DISK)
 	qemu-system-x86_64 \
 		-M q35 \
 		-cdrom $(IMAGE_NAME).iso \
 		-boot d \
-		$(QEMUFLAGS)
+		$(DATA_FLAGS) $(QEMUFLAGS)
 
 .PHONY: run-uefi
-run-uefi: edk2-ovmf $(IMAGE_NAME).iso
+run-uefi: edk2-ovmf $(IMAGE_NAME).iso $(DATA_DISK)
 	qemu-system-x86_64 \
 		-M q35 \
 		-drive if=pflash,unit=0,format=raw,file=edk2-ovmf/ovmf-code-x86_64.fd,readonly=on \
 		-cdrom $(IMAGE_NAME).iso \
 		-boot d \
-		$(QEMUFLAGS)
+		$(DATA_FLAGS) $(QEMUFLAGS)
 
 .PHONY: run-hdd
-run-hdd: $(IMAGE_NAME).hdd
+run-hdd: $(IMAGE_NAME).hdd $(DATA_DISK)
 	qemu-system-x86_64 \
 		-M q35 \
 		-hda $(IMAGE_NAME).hdd \
-		$(QEMUFLAGS)
+		$(DATA_FLAGS) $(QEMUFLAGS)
 
 .PHONY: run-hdd-uefi
-run-hdd-uefi: edk2-ovmf $(IMAGE_NAME).hdd
+run-hdd-uefi: edk2-ovmf $(IMAGE_NAME).hdd $(DATA_DISK)
 	qemu-system-x86_64 \
 		-M q35 \
 		-drive if=pflash,unit=0,format=raw,file=edk2-ovmf/ovmf-code-x86_64.fd,readonly=on \
 		-hda $(IMAGE_NAME).hdd \
-		$(QEMUFLAGS)
+		$(DATA_FLAGS) $(QEMUFLAGS)
+
+# Publish a complete volume without overwriting an existing data disk.
+$(DATA_DISK):
+	@set -e; tmp=$$(mktemp "$@.XXXXXX"); trap 'rm -f "$$tmp"' EXIT; \
+		dd if=/dev/zero of="$$tmp" bs=512 count=65 2>/dev/null; \
+		printf CRONKFS1 | dd of="$$tmp" conv=notrunc 2>/dev/null; \
+		ln "$$tmp" "$@" || test -f "$@"
 
 edk2-ovmf:
 	curl -L https://github.com/osdev0/edk2-ovmf-nightly/releases/latest/download/edk2-ovmf.tar.gz | gunzip | tar -xf -
@@ -74,7 +86,7 @@ kernel: kernel/.deps-obtained
 $(IMAGE_NAME).iso: limine-binary/limine kernel
 	rm -rf iso_root
 	mkdir -p iso_root/boot
-	cp -v kernel/bin/kernel iso_root/boot/
+	cp -v kernel/bin/kernel kernel/bin/hello.cronk kernel/bin/counter.cronk iso_root/boot/
 	mkdir -p iso_root/boot/limine
 	cp -v limine.conf limine-binary/limine-bios.sys limine-binary/limine-bios-cd.bin limine-binary/limine-uefi-cd.bin iso_root/boot/limine/
 	mkdir -p iso_root/EFI/BOOT
@@ -95,7 +107,7 @@ $(IMAGE_NAME).hdd: limine-binary/limine kernel
 	./limine-binary/limine bios-install $(IMAGE_NAME).hdd
 	mformat -i $(IMAGE_NAME).hdd@@1M
 	mmd -i $(IMAGE_NAME).hdd@@1M ::/EFI ::/EFI/BOOT ::/boot ::/boot/limine
-	mcopy -i $(IMAGE_NAME).hdd@@1M kernel/bin/kernel ::/boot
+	mcopy -i $(IMAGE_NAME).hdd@@1M kernel/bin/kernel kernel/bin/hello.cronk kernel/bin/counter.cronk ::/boot
 	mcopy -i $(IMAGE_NAME).hdd@@1M limine.conf limine-binary/limine-bios.sys ::/boot/limine
 	mcopy -i $(IMAGE_NAME).hdd@@1M limine-binary/BOOTX64.EFI ::/EFI/BOOT
 	mcopy -i $(IMAGE_NAME).hdd@@1M limine-binary/BOOTIA32.EFI ::/EFI/BOOT
