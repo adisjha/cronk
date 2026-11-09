@@ -14,23 +14,23 @@ static const char *const digits[11][3] = {
 
 void clock_view(struct limine_framebuffer *fb) {
     terminal_clear(fb);
-    terminal_write(fb, "Clock (UTC)    Q/F3 shell\n");
+    terminal_write(fb, "Clock (UTC)    Q/Esc back\n");
     const size_t width = 28 * FONT_WIDTH;
-    size_t x = fb->width > width ? (fb->width - width) / 2 : 0;
+    size_t x = ui_width(fb) > width ? (ui_width(fb) - width) / 2 : 0;
     // Reserve room for the title, face numerals and five rows of digital time.
-    int available = (int)fb->height - 60 - 7 * FONT_HEIGHT;
+    int available = (int)ui_height(fb) - 60 - 7 * FONT_HEIGHT;
     int radius = available / 2;
-    int horizontal_limit = (int)fb->width / 2 - 2 * FONT_WIDTH;
+    int horizontal_limit = (int)ui_width(fb) / 2 - 2 * FONT_WIDTH;
     if (radius > horizontal_limit) radius = horizontal_limit;
-    struct clock_face face = {(int)fb->width / 2, 60 + FONT_HEIGHT / 2 + radius, radius};
+    struct clock_face face = {(int)ui_width(fb) / 2, 60 + FONT_HEIGHT / 2 + radius, radius};
     bool show_face = radius >= 45;
-    size_t y = show_face ? (size_t)(face.y + radius + FONT_HEIGHT) : fb->height / 2;
+    size_t y = show_face ? (size_t)(face.y + radius + FONT_HEIGHT) : ui_height(fb) / 2;
     if (show_face) clock_face_draw(fb, face);
     struct clock_sample previous = {0};
     unsigned last_second = 60, last_ms = 1000;
     for (;;) {
         char key = keyboard_poll_char();
-        if (key == 'q' || key == KEY_F3) break;
+        if (key == KEY_ESC || key == 'q') break;
         struct clock_sample t;
         if (!terminal_tick(fb, &t) || (last_ms == t.millisecond && last_second == t.second)) {
             asm volatile("pause");
@@ -61,8 +61,8 @@ void clock_view(struct limine_framebuffer *fb) {
         fraction[2] += t.millisecond / 10 % 10;
         fraction[3] += t.millisecond % 10;
         size_t fy = y + 4 * FONT_HEIGHT;
-        size_t fx = fb->width >= 6 * FONT_WIDTH ? (fb->width - 6 * FONT_WIDTH) / 2 : 0;
-        if (fy + FONT_HEIGHT <= fb->height && fx + 6 * FONT_WIDTH <= fb->width) {
+        size_t fx = ui_width(fb) >= 6 * FONT_WIDTH ? (ui_width(fb) - 6 * FONT_WIDTH) / 2 : 0;
+        if (fy + FONT_HEIGHT <= ui_height(fb) && fx + 6 * FONT_WIDTH <= ui_width(fb)) {
             draw_string(fb, fraction, fx, fy, 0xffffff, 0);
         }
         last_second = t.second;

@@ -1,5 +1,43 @@
 # Limine C Template
 
+### Hardware benchmarks
+
+Run `bench` for CPU, RAM, and disk tests (normally about 2–5 seconds).
+Use `bench cpu`, `bench ram`, or `bench disk` to run one section.
+The original two-job scheduler comparison is available as `bench sched`.
+
+CPU results show the advertised base frequency when available, a roughly
+one-second PIT calibration of the TSC timer, and checksum-verified xorshift
+throughput. TSC frequency is not a measurement of live core frequency.
+
+RAM results measure scalar sequential reads and writes over an allocated
+8 MiB working set, verify contents, and release the allocation afterward.
+Disk results measure 512-byte ATA PIO reads over the 32 KiB file area and
+writes with a cache flush after every sector. Writes use an unused file slot,
+keep its filename empty, verify readback, and restore its original bytes.
+No occupied file slot or filesystem header is written. A full disk skips
+the write test; an unavailable or invalid disk skips both disk tests.
+
+Rates use decimal MB/s and elapsed guest time, including other running tasks.
+RAM caching and QEMU/host disk caching affect results. These tests measure
+the current guest access paths, not bare-metal peak RAM/SSD performance.
+
+Integration checks use temporary disks and verify exact disk preservation,
+RAM release, and error handling:
+`python3 tests/qemu_hardware_benchmark.py` (after building the ISO).
+
+### Text editor
+
+In the OS shell, run `edit notes.txt` to create or open a text file.
+Paths work relative to the current folder or from `/`; quote paths containing
+spaces, for example `edit "my notes.txt"`.
+
+- Arrow keys move the cursor; Enter inserts a new line.
+- Backspace and Delete remove text.
+- F2 saves to disk. Esc quits, with a discard prompt for unsaved changes.
+- A `*` marks unsaved changes. The editor shows usage against the filesystem's
+  479-byte text-file limit and refuses to edit folders or executable files.
+
 This repository will demonstrate how to set up a basic x86-64 kernel in C using Limine.
 
 It is recommended to cross reference the contents of this repository with [the Limine Bare Bones](https://osdev.wiki/wiki/Limine_Bare_Bones) OSDev wiki page.

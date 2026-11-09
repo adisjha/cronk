@@ -1,3 +1,4 @@
+#include "gfx/framebuffer.h"
 #include "program/program.h"
 #include <stdbool.h>
 #include <stddef.h>
@@ -59,6 +60,7 @@ void kmain(void) {
     // Fetch the first framebuffer.
     struct limine_framebuffer *framebuffer = framebuffer_request.response->framebuffers[0];
 
+    if (framebuffer->width >= 3840 && framebuffer->height >= 2160) ui_set_scale(framebuffer, 2);
     pages_init();
     clock_start();
     terminal_clear(framebuffer);

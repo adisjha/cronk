@@ -16,3 +16,8 @@ void terminal_write_uint(struct limine_framebuffer *fb, uint64_t value);
 
 void terminal_begin_refresh(void);
 void terminal_end_refresh(struct limine_framebuffer *fb);
+
+enum terminal_tab { TAB_SHELL, TAB_APPS, TAB_HELP };
+void terminal_tab(struct limine_framebuffer *fb, enum terminal_tab tab);
+void terminal_history(struct limine_framebuffer *fb, int direction);
+bool terminal_at_bottom(void);

@@ -22,6 +22,7 @@ void scheduler_start(void);
 void scheduler_wait_input(void);
 void scheduler_sleep(unsigned ticks);
 uint64_t scheduler_ticks(void);
+uint64_t scheduler_tick_period_ns(void);
 unsigned scheduler_spawn(const char *name, void (*entry)(void *), void *context, void (*release)(void *));
 void scheduler_reap(void);
 void scheduler_output(void *unused, const char *text);

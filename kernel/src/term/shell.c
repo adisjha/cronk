@@ -1,10 +1,11 @@
+#include "gfx/framebuffer.h"
 #include "shell.h"
+#include "editor.h"
 #include "sched/benchmark.h"
-#include "program_view.h"
+#include "sched/hardware_benchmark.h"
+#include "apps.h"
 #include "storage/files.h"
 #include "sched/scheduler.h"
-#include "memory_view.h"
-#include "clock_view.h"
 #include "terminal.h"
 #include "drivers/keyboard/keyboard.h"
 #include <stddef.h>
@@ -44,19 +45,46 @@ static unsigned parse_id(const char *text) {
 
 static void shell_execute(struct limine_framebuffer *fb, char *cmd){
     if (streq(cmd, "help")) {
-        terminal_write(fb, "help   clear   programs   mem   time   run FILE (try run hello.bin)\n"
-                           "runbg FILE   start a disk program in the background\n"
-                           "ps           list tasks and scheduled slices\n"
-                           "spawn        start a background worker\n"
-                           "kill ID      stop a background worker\n"
-                           "uptime       seconds since scheduler start\n"
-                           "bench        compare polling and sleeping on one CPU\n"
-                           "echo TEXT    print text\n"
-                           "ls   cat NAME   write NAME TEXT   rm NAME\n");
-    } else if (streq(cmd, "ls")) {
-        files_command(fb, FILE_LIST, cmd);
+        app_open(fb, APP_HELP);
+    } else if (streq(cmd, "apps")) {
+        app_open(fb, APP_MENU);
+    } else if (streq(cmd, "files")) {
+        app_open(fb, APP_FILES);
+    } else if (streq(cmd, "calc")) {
+        app_open(fb, APP_CALC);
+    } else if (streq(cmd, "scale") || starts_with(cmd, "scale ")) {
+        if (cmd[5]) {
+            unsigned value = parse_id(cmd + 6);
+            if (!ui_set_scale(fb, value)) {
+                terminal_write(fb, "choose 1-4 with at least 640x360 logical pixels\n");
+                return;
+            }
+            terminal_clear(fb);
+        }
+        terminal_write_uint(fb, fb->width);
+        terminal_putchar(fb, 'x');
+        terminal_write_uint(fb, fb->height);
+        terminal_write(fb, "   UI scale ");
+        terminal_write_uint(fb, ui_scale());
+        terminal_write(fb, "x\n");
+    } else if (streq(cmd, "pwd")) {
+        files_command(fb, FILE_PWD, cmd + 3);
+    } else if (streq(cmd, "cd") || starts_with(cmd, "cd ")) {
+        files_command(fb, FILE_CD, cmd + 2);
+    } else if (starts_with(cmd, "mv ")) {
+        files_command(fb, FILE_MOVE, cmd + 3);
+    } else if (starts_with(cmd, "cp ")) {
+        files_command(fb, FILE_COPY, cmd + 3);
+    } else if (starts_with(cmd, "mkdir ")) {
+        files_command(fb, FILE_MKDIR, cmd + 6);
+    } else if (starts_with(cmd, "rmdir ")) {
+        files_command(fb, FILE_RMDIR, cmd + 6);
+    } else if (streq(cmd, "ls") || starts_with(cmd, "ls ")) {
+        files_command(fb, FILE_LIST, cmd + 2);
     } else if (starts_with(cmd, "cat ")) {
         files_command(fb, FILE_READ, cmd + 4);
+    } else if (streq(cmd, "edit") || starts_with(cmd, "edit ")) {
+        editor_open(fb, cmd + 4);
     } else if (starts_with(cmd, "write ")) {
         files_command(fb, FILE_WRITE, cmd + 6);
     } else if (starts_with(cmd, "rm ")) {
@@ -85,6 +113,14 @@ static void shell_execute(struct limine_framebuffer *fb, char *cmd){
             terminal_putchar(fb, '\n');
         } else terminal_write(fb, "task table full\n");
     } else if (streq(cmd, "bench")) {
+        hardware_benchmark(fb, BENCH_ALL);
+    } else if (streq(cmd, "bench cpu")) {
+        hardware_benchmark(fb, BENCH_CPU);
+    } else if (streq(cmd, "bench ram")) {
+        hardware_benchmark(fb, BENCH_RAM);
+    } else if (streq(cmd, "bench disk")) {
+        hardware_benchmark(fb, BENCH_DISK);
+    } else if (streq(cmd, "bench sched")) {
         scheduler_benchmark(fb);
     } else if (streq(cmd, "uptime")) {
         terminal_write_uint(fb, scheduler_seconds());
@@ -95,9 +131,9 @@ static void shell_execute(struct limine_framebuffer *fb, char *cmd){
         terminal_write(fb, cmd[4] ? cmd + 5 : "");
         terminal_putchar(fb, '\n');
     }
-    else if (streq(cmd, "time") || streq(cmd, "clock")) { clock_view(fb); }
-    else if (streq(cmd, "programs") || streq(cmd, "top")) { program_view(fb); }
-    else if (streq(cmd, "mem")) { memory_view(fb); }
+    else if (streq(cmd, "time") || streq(cmd, "clock")) { app_open(fb, APP_CLOCK); }
+    else if (streq(cmd, "programs") || streq(cmd, "top")) { app_open(fb, APP_PROGRAMS); }
+    else if (streq(cmd, "mem")) { app_open(fb, APP_MEMORY); }
     else if (starts_with(cmd, "runbg ")) { files_command(fb, FILE_RUNBG, cmd + 6); }
     else if (starts_with(cmd, "run ")) { files_command(fb, FILE_RUN, cmd + 4); }
     else if (streq(cmd, "clear")){terminal_clear(fb);}
@@ -124,15 +160,15 @@ void shell_run(struct limine_framebuffer *fb) {
             scheduler_wait_input();
             continue;
         }
-        terminal_erase_cursor(fb);
-        if (c == KEY_F1 || c == KEY_F2 || c == KEY_F3) {
-            if (c == KEY_F1) program_view(fb);
-            else if (c == KEY_F3) clock_view(fb);
-            else memory_view(fb);
-            terminal_write(fb, "> ");
-            input_buf[input_len] = 0;
-            terminal_write(fb, input_buf);
+        if (c == KEY_PAGE_UP || c == KEY_PAGE_DOWN) {
+            terminal_history(fb, c == KEY_PAGE_UP ? 1 : -1);
+            if (terminal_at_bottom()) terminal_draw_cursor(fb);
+            continue;
         }
+        if (!terminal_at_bottom()) terminal_history(fb, 0);
+        terminal_erase_cursor(fb);
+        if (c == KEY_APPS) { app_open(fb, APP_MENU); }
+
         else if (c=='\n') {
             input_buf[input_len] = 0;
             
@@ -149,7 +185,7 @@ void shell_run(struct limine_framebuffer *fb) {
                 terminal_backspace(fb);
             }
         }
-        else {
+        else if (c >= ' ') {
             if (input_len < INPUT_MAX - 1){
                 input_buf[input_len++] = c;
                 terminal_putchar(fb, c);

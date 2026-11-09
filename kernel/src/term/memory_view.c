@@ -30,9 +30,9 @@ static void metric(struct limine_framebuffer *fb, const char *name, size_t pages
 void memory_view(struct limine_framebuffer *fb) {
     size_t index = 0, offset = 0;
     // Adapt dump dimensions to the actual framebuffer.
-    size_t cols = fb->width / FONT_WIDTH;
+    size_t cols = ui_width(fb) / FONT_WIDTH;
     size_t bytes_per_row = cols >= 76 ? 16 : 8;
-    size_t rows = fb->height > 24 ? (fb->height - 24) / FONT_HEIGHT : 0;
+    size_t rows = ui_height(fb) > 24 ? (ui_height(fb) - 24) / FONT_HEIGHT : 0;
     size_t lines = rows > 13 ? rows - 13 : 1;
     if (lines > 16) lines = 16;
     size_t step = lines * bytes_per_row;
@@ -65,7 +65,7 @@ void memory_view(struct limine_framebuffer *fb) {
         } else {
             terminal_write(fb, "unavailable\n");
         }
-        terminal_write(fb, "N/P page   J/K bytes   Q/F2 shell\n\n");
+        terminal_write(fb, "N/P page   J/K bytes   Q/Esc back\n\n");
         for (size_t i = offset; page && i < PAGE_SIZE && i < offset + step; i += bytes_per_row) {
             number(fb, i, 16, 3);
             terminal_write(fb, "  ");
@@ -99,7 +99,7 @@ void memory_view(struct limine_framebuffer *fb) {
             }
             if (!key) scheduler_wait_input();
         } while (!key);
-        if (key == 'q' || key == KEY_F2) break;
+        if (key == KEY_ESC || key == 'q') break;
         if (key == 'n' && index + 1 < s.managed) { ++index; offset = 0; }
         if (key == 'p' && index) { --index; offset = 0; }
         if (key == 'j' && offset + step < PAGE_SIZE) offset += step;

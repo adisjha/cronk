@@ -4,6 +4,8 @@
 # Default user QEMU flags. These are appended to the QEMU command calls.
 QEMUFLAGS := -m 2G
 
+VIDEO_FLAGS := -vga none -device VGA,vgamem_mb=64,edid=on,xres=3840,yres=2160
+
 DATA_DISK := cronk-data.img
 DATA_FLAGS = -device isa-ide,id=cronkide,iobase=0x1e8,iobase2=0x3ee,irq=11 \
     -drive if=none,id=cronkdata,format=raw,file="$(DATA_DISK)" \
@@ -27,15 +29,23 @@ all-hdd: $(IMAGE_NAME).hdd
 .PHONY: run
 run: $(IMAGE_NAME).iso $(DATA_DISK)
 	qemu-system-x86_64 \
-		-M q35 \
+		-M q35 $(VIDEO_FLAGS) \
 		-cdrom $(IMAGE_NAME).iso \
 		-boot d \
 		$(DATA_FLAGS) $(QEMUFLAGS)
 
+.PHONY: run-fullscreen
+ifeq ($(shell uname -s),Darwin)
+run-fullscreen: override QEMUFLAGS += -display cocoa,full-screen=on,zoom-to-fit=on
+else
+run-fullscreen: override QEMUFLAGS += -full-screen
+endif
+run-fullscreen: run
+
 .PHONY: run-uefi
 run-uefi: edk2-ovmf $(IMAGE_NAME).iso $(DATA_DISK)
 	qemu-system-x86_64 \
-		-M q35 \
+		-M q35 $(VIDEO_FLAGS) \
 		-drive if=pflash,unit=0,format=raw,file=edk2-ovmf/ovmf-code-x86_64.fd,readonly=on \
 		-cdrom $(IMAGE_NAME).iso \
 		-boot d \
@@ -44,14 +54,14 @@ run-uefi: edk2-ovmf $(IMAGE_NAME).iso $(DATA_DISK)
 .PHONY: run-hdd
 run-hdd: $(IMAGE_NAME).hdd $(DATA_DISK)
 	qemu-system-x86_64 \
-		-M q35 \
+		-M q35 $(VIDEO_FLAGS) \
 		-hda $(IMAGE_NAME).hdd \
 		$(DATA_FLAGS) $(QEMUFLAGS)
 
 .PHONY: run-hdd-uefi
 run-hdd-uefi: edk2-ovmf $(IMAGE_NAME).hdd $(DATA_DISK)
 	qemu-system-x86_64 \
-		-M q35 \
+		-M q35 $(VIDEO_FLAGS) \
 		-drive if=pflash,unit=0,format=raw,file=edk2-ovmf/ovmf-code-x86_64.fd,readonly=on \
 		-hda $(IMAGE_NAME).hdd \
 		$(DATA_FLAGS) $(QEMUFLAGS)

@@ -204,6 +204,7 @@ void scheduler_sleep(unsigned delay) {
 }
 
 uint64_t scheduler_ticks(void) { return ticks; }
+uint64_t scheduler_tick_period_ns(void) { return (uint64_t)DIVISOR * 1000000000 / PIT_HZ; }
 
 unsigned scheduler_spawn(const char *name, void (*entry)(void *), void *context, void (*release)(void *)) {
     asm volatile("cli" ::: "memory");
