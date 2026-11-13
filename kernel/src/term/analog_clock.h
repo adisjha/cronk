@@ -1,5 +1,5 @@
 #pragma once
-#include "arch/x86_64/clock.h"
+#include "arch/clock.h"
 #include <limine.h>
 
 struct clock_face { int x, y, radius; };

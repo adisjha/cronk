@@ -1,4 +1,7 @@
 #include "apps.h"
+#include "editor.h"
+#include "sched/service.h"
+#include "arch/cpu.h"
 #include "mm/pages.h"
 #include "terminal.h"
 #include "program_view.h"
@@ -52,10 +55,11 @@ static const char *const commands[] = {
     "cat NAME      Read a text file", "write NAME TEXT   Save or replace a file",
     "edit PATH     Text editor (F2 save, Esc quit)",
     "rm NAME       Remove a file", "run FILE      Launch a disk program",
-    "runbg FILE    Launch in background", "ps            List tasks and privilege rings",
-    "kill ID       Stop a background task", "spawn         Start a demo worker",
+    "runbg FILE    Launch in background", "ps            List tasks and privilege levels",
+    "kill ID       Stop a background task", "spawn         Start a demo worker", "spawn busy    Start a CPU worker for per-core graphs",
     "uptime        Seconds since scheduler start", "bench         CPU, RAM and disk benchmarks",
-    "bench cpu/ram/disk   Run one hardware test", "bench sched   Run the scheduler benchmark",
+    "bench cpu/ram/disk   Run one hardware test", "bench parallel   Four CPU jobs across available cores", "bench sched   Run the scheduler benchmark",
+    "bench ram 128 KiB  RAM test; bare sizes mean MiB", "bench caches  Cache geometry and size/speed sweep",
     "scale [1-4]   Show or change UI scale", "echo TEXT     Print text",
     "clear         Clear terminal and scrollback"
 };
@@ -244,7 +248,7 @@ static void system_info(struct limine_framebuffer *fb) {
     for (;;) {
         terminal_tick(fb, NULL);
         terminal_begin_refresh();
-        terminal_write(fb, "System information\nEsc back\n\nCronk / x86-64 / one active CPU\nDisplay: ");
+        terminal_write(fb, "System information\nEsc back\n\nCronk / " ARCH_NAME " / scheduled CPU cores\nDisplay: ");
         terminal_write_uint(fb, fb->width);
         terminal_putchar(fb, 'x');
         terminal_write_uint(fb, fb->height);
@@ -254,13 +258,19 @@ static void system_info(struct limine_framebuffer *fb) {
         terminal_write_uint(fb, scheduler_seconds());
         terminal_write(fb, " s\nAvailable memory: ");
         terminal_write_uint(fb, pages_stats().available * 4);
-        terminal_write(fb, " KiB\nKernel ring: 0\nDisk program ring: 3\n");
+        terminal_write(fb, " KiB\nKernel privilege level: ");
+        terminal_write_uint(fb, ARCH_KERNEL_LEVEL);
+        terminal_write(fb, "\nUser privilege level: ");
+        terminal_write_uint(fb, ARCH_USER_LEVEL); terminal_putchar(fb, '\n');
         terminal_end_refresh(fb);
         if (next_key(fb) == KEY_ESC) return;
     }
 }
 
 static void show(struct limine_framebuffer *fb, enum app app) {
+    static const char *names[] = {"applications", "stopwatch", "system information", "program manager",
+                                  "memory viewer", "clock viewer", "calculator", "file browser", "help"};
+    scheduler_current_name(names[app]);
     terminal_tab(fb, app == APP_HELP ? TAB_HELP : TAB_APPS);
     switch (app) {
     case APP_PROGRAMS: program_view(fb); break;
@@ -275,7 +285,7 @@ static void show(struct limine_framebuffer *fb, enum app app) {
     }
 }
 
-void app_open(struct limine_framebuffer *fb, enum app app) {
+static void app_run(struct limine_framebuffer *fb, enum app app) {
     if (app == APP_MENU) {
         static const struct { const char *name; enum app id; } entries[] = {
             {"Program manager", APP_PROGRAMS}, {"Memory", APP_MEMORY}, {"Clock", APP_CLOCK},
@@ -303,4 +313,35 @@ void app_open(struct limine_framebuffer *fb, enum app app) {
     } else show(fb, app);
     terminal_tab(fb, TAB_SHELL);
     terminal_history(fb, 0);
+}
+
+static struct kernel_service desktop;
+struct app_request { struct limine_framebuffer *fb; enum app app; };
+static void open_requested_app(void *context) {
+    struct app_request *request = context;
+    static const char *names[] = {"applications", "stopwatch", "system information", "program manager",
+                                  "memory viewer", "clock viewer", "calculator", "file browser", "help"};
+    scheduler_current_name(names[request->app]);
+    app_run(request->fb, request->app);
+    scheduler_current_name("desktop");
+}
+void desktop_start(struct limine_framebuffer *fb) {
+    (void)fb;
+    service_start(&desktop, "desktop", pages_breakdown().display * PAGE_SIZE);
+}
+void app_open(struct limine_framebuffer *fb, enum app app) {
+    struct app_request request = {fb, app};
+    service_call(&desktop, open_requested_app, &request);
+}
+
+struct editor_request { struct limine_framebuffer *fb; char *args; };
+static void edit_requested_file(void *context) {
+    struct editor_request *request = context;
+    scheduler_current_name("text editor");
+    editor_open(request->fb, request->args);
+    scheduler_current_name("desktop");
+}
+void desktop_edit(struct limine_framebuffer *fb, char *args) {
+    struct editor_request request = {fb, args};
+    service_call(&desktop, edit_requested_file, &request);
 }

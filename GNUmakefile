@@ -7,9 +7,17 @@ QEMUFLAGS := -m 2G
 VIDEO_FLAGS := -vga none -device VGA,vgamem_mb=64,edid=on,xres=3840,yres=2160
 
 DATA_DISK := cronk-data.img
+DISK_DRIVER ?= virtio
+ifeq ($(DISK_DRIVER),virtio)
+DATA_FLAGS = -drive if=none,id=cronkdata,format=raw,file="$(DATA_DISK)" \
+    -device virtio-blk-pci,drive=cronkdata,disable-modern=on
+else ifeq ($(DISK_DRIVER),ata)
 DATA_FLAGS = -device isa-ide,id=cronkide,iobase=0x1e8,iobase2=0x3ee,irq=11 \
     -drive if=none,id=cronkdata,format=raw,file="$(DATA_DISK)" \
     -device ide-hd,bus=cronkide.0,drive=cronkdata
+else
+$(error DISK_DRIVER must be virtio or ata)
+endif
 
 override IMAGE_NAME := template
 
@@ -27,7 +35,7 @@ all: $(IMAGE_NAME).iso
 all-hdd: $(IMAGE_NAME).hdd
 
 .PHONY: run
-run: $(IMAGE_NAME).iso $(DATA_DISK)
+run: $(IMAGE_NAME).iso prepare-data
 	qemu-system-x86_64 \
 		-M q35 $(VIDEO_FLAGS) \
 		-cdrom $(IMAGE_NAME).iso \
@@ -43,7 +51,7 @@ endif
 run-fullscreen: run
 
 .PHONY: run-uefi
-run-uefi: edk2-ovmf $(IMAGE_NAME).iso $(DATA_DISK)
+run-uefi: edk2-ovmf $(IMAGE_NAME).iso prepare-data
 	qemu-system-x86_64 \
 		-M q35 $(VIDEO_FLAGS) \
 		-drive if=pflash,unit=0,format=raw,file=edk2-ovmf/ovmf-code-x86_64.fd,readonly=on \
@@ -52,14 +60,14 @@ run-uefi: edk2-ovmf $(IMAGE_NAME).iso $(DATA_DISK)
 		$(DATA_FLAGS) $(QEMUFLAGS)
 
 .PHONY: run-hdd
-run-hdd: $(IMAGE_NAME).hdd $(DATA_DISK)
+run-hdd: $(IMAGE_NAME).hdd prepare-data
 	qemu-system-x86_64 \
 		-M q35 $(VIDEO_FLAGS) \
 		-hda $(IMAGE_NAME).hdd \
 		$(DATA_FLAGS) $(QEMUFLAGS)
 
 .PHONY: run-hdd-uefi
-run-hdd-uefi: edk2-ovmf $(IMAGE_NAME).hdd $(DATA_DISK)
+run-hdd-uefi: edk2-ovmf $(IMAGE_NAME).hdd prepare-data
 	qemu-system-x86_64 \
 		-M q35 $(VIDEO_FLAGS) \
 		-drive if=pflash,unit=0,format=raw,file=edk2-ovmf/ovmf-code-x86_64.fd,readonly=on \
@@ -68,10 +76,10 @@ run-hdd-uefi: edk2-ovmf $(IMAGE_NAME).hdd $(DATA_DISK)
 
 # Publish a complete volume without overwriting an existing data disk.
 $(DATA_DISK):
-	@set -e; tmp=$$(mktemp "$@.XXXXXX"); trap 'rm -f "$$tmp"' EXIT; \
-		dd if=/dev/zero of="$$tmp" bs=512 count=65 2>/dev/null; \
-		printf CRONKFS1 | dd of="$$tmp" conv=notrunc 2>/dev/null; \
-		ln "$$tmp" "$@" || test -f "$@"
+	python3 tools/storage_image.py "$@"
+.PHONY: prepare-data
+prepare-data: $(DATA_DISK)
+	python3 tools/storage_image.py "$(DATA_DISK)"
 
 edk2-ovmf:
 	curl -L https://github.com/osdev0/edk2-ovmf-nightly/releases/latest/download/edk2-ovmf.tar.gz | gunzip | tar -xf -
@@ -131,3 +139,5 @@ clean:
 distclean: clean
 	$(MAKE) -C kernel distclean
 	rm -rf limine-binary edk2-ovmf
+
+include GNUmakefile.arm64

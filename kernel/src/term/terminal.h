@@ -1,7 +1,7 @@
 #pragma once
 
 #include <limine.h>
-#include "arch/x86_64/clock.h"
+#include "arch/clock.h"
 
 bool terminal_tick(struct limine_framebuffer *fb, struct clock_sample *sample);
 

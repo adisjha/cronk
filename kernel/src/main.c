@@ -7,6 +7,10 @@
 #include "term/shell.h"
 #include "sched/scheduler.h"
 #include "mm/pages.h"
+#include "arch/cpu.h"
+#include "storage/block.h"
+#include "sched/service.h"
+#include "term/apps.h"
 
 // Set the base revision to 6, this is recommended as this is the latest
 // base revision described by the Limine boot protocol specification.
@@ -26,6 +30,12 @@ static volatile struct limine_framebuffer_request framebuffer_request = {
     .revision = 0
 };
 
+// Make the boot task's reserved stack size explicit for task RAM reporting.
+__attribute__((used, section(".limine_requests")))
+static volatile struct limine_stack_size_request stack_request = {
+    .id = LIMINE_STACK_SIZE_REQUEST_ID, .stack_size = 65536
+};
+
 // Finally, define the start and end markers for the Limine requests.
 // These can also be moved anywhere, to any .c file, as seen fit.
 
@@ -38,7 +48,7 @@ static volatile uint64_t limine_requests_end_marker[] = LIMINE_REQUESTS_END_MARK
 // Halt and catch fire function.
 static void hcf(void) {
     for (;;) {
-        asm ("hlt");
+        arch_idle();
     }
 }
 
@@ -58,16 +68,37 @@ void kmain(void) {
     }
 
     // Fetch the first framebuffer.
-    struct limine_framebuffer *framebuffer = framebuffer_request.response->framebuffers[0];
+    static struct limine_framebuffer permanent_framebuffer;
+    permanent_framebuffer = *framebuffer_request.response->framebuffers[0];
+    permanent_framebuffer.modes = NULL; permanent_framebuffer.mode_count = 0;
+    struct limine_framebuffer *framebuffer = &permanent_framebuffer;
 
-    if (framebuffer->width >= 3840 && framebuffer->height >= 2160) ui_set_scale(framebuffer, 2);
     pages_init();
+    arch_early_init();
+    framebuffer = arch_display_init(framebuffer);
+    if (framebuffer->width >= 3840 && framebuffer->height >= 2160) ui_set_scale(framebuffer, 2);
     clock_start();
+    size_t storage_before = pages_breakdown().devices;
+    disk_init();
+    size_t storage_bytes = (pages_breakdown().devices - storage_before) * PAGE_SIZE;
     terminal_clear(framebuffer);
     terminal_write(framebuffer, "cronk booted.\n");
     terminal_write(framebuffer, "framebuffer initialized\n");
     terminal_write(framebuffer, "welcome to terminal\n");
     program_install();
+    arch_start_secondary_cpus();
+    size_t input_before = pages_breakdown().devices;
     scheduler_start();
+    size_t input_bytes = (pages_breakdown().devices - input_before) * PAGE_SIZE;
+    system_services_start(input_bytes, storage_bytes);
+    desktop_start(framebuffer);
+    arch_release_secondary_cpus();
+    // APs already left bootloader stacks/tables before their readiness reports.
+    if (arch_boot_reclaim_safe()) {
+        size_t freed = pages_reclaim_boot();
+        terminal_write(framebuffer, "Boot RAM reclaimed: ");
+        terminal_write_uint(framebuffer, freed * 4); terminal_write(framebuffer, " KiB\n");
+    }
+    scheduler_task_memory(1002,SERVICE_STACK_SIZE+pages_breakdown().metadata*PAGE_SIZE);
     shell_run(framebuffer);
 }

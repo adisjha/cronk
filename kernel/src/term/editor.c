@@ -1,4 +1,6 @@
 #include "editor.h"
+#include "mm/pages.h"
+#include "format.h"
 #include "terminal.h"
 #include "gfx/framebuffer.h"
 #include "drivers/keyboard/keyboard.h"
@@ -40,16 +42,20 @@ void editor_open(struct limine_framebuffer *fb, char *args) {
     }
     while (*end == ' ') ++end;
     if (!*name || *end) { terminal_write(fb, "usage: edit PATH (quote paths containing spaces)\n"); return; }
-    char text[FILE_TEXT_MAX + 1], saved[FILE_TEXT_MAX + 1];
+    unsigned buffer_pages = 2 * (FILE_TEXT_MAX + 1) / PAGE_SIZE;
+    char *text = pages_alloc(buffer_pages, PAGE_BUFFER);
+    if(!text){terminal_write(fb,"unable to allocate editor buffers\n");return;}
+    char *saved = text + FILE_TEXT_MAX + 1;
+    scheduler_charge_current_memory((int64_t)buffer_pages * PAGE_SIZE);
     size_t len, saved_len;
     const char *error = files_text_load(name, text, &len);
-    if (error) { terminal_write(fb, error); terminal_putchar(fb, '\n'); return; }
+    if (error) { terminal_write(fb, error); terminal_putchar(fb, '\n'); goto cleanup; }
     memcpy(saved, text, len + 1);
     saved_len = len;
     size_t pos = 0, top = 0;
     size_t cols = ui_width(fb) / FONT_WIDTH;
     size_t rows = (ui_height(fb) - 24) / FONT_HEIGHT;
-    if (!cols || rows < 4) return;
+    if (!cols || rows < 4) goto cleanup;
     rows -= 3;
     const char *status = "F2 save   Esc quit   Arrows move   Backspace/Delete erase";
     bool confirm = false;
@@ -80,10 +86,9 @@ void editor_open(struct limine_framebuffer *fb, char *args) {
         draw_char(fb, cursor, col * FONT_WIDTH, 24 + (row - top + 1) * FONT_HEIGHT, 0, 0xffffff);
         for (size_t i = 0; status[i] && i < cols; ++i)
             draw_char(fb, status[i], i * FONT_WIDTH, 24 + (rows + 1) * FONT_HEIGHT, 0xffcc66, 0);
-        char usage[] = "000 / 479 bytes";
-        usage[0] += len / 100;
-        usage[1] += (len / 10) % 10;
-        usage[2] += len % 10;
+        char usage[32]; format_uint(usage,len);
+        size_t usage_len=0;while(usage[usage_len])++usage_len;
+        const char *suffix=" / 65535 bytes";while(*suffix)usage[usage_len++]=*suffix++;usage[usage_len]=0;
         draw_string(fb, usage, 0, 24 + (rows + 2) * FONT_HEIGHT, 0xaaaaaa, 0);
         char key;
         while (!(key = keyboard_poll_char())) {
@@ -120,7 +125,7 @@ void editor_open(struct limine_framebuffer *fb, char *args) {
                 --len;
             }
         } else if (key == '\n' || (key >= 32 && key < 127)) {
-            if (len == FILE_TEXT_MAX) status = "File full (479 bytes). Delete text before typing more.";
+            if (len == FILE_TEXT_MAX) status = "File full (65535 bytes). Delete text before typing more.";
             else {
                 memmove(text + pos + 1, text + pos, len - pos + 1);
                 text[pos++] = key;
@@ -128,5 +133,8 @@ void editor_open(struct limine_framebuffer *fb, char *args) {
             }
         }
     }
+cleanup:
+    scheduler_charge_current_memory(-(int64_t)buffer_pages * PAGE_SIZE);
+    pages_free(text,buffer_pages);
     terminal_clear(fb);
 }

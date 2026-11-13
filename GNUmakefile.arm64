@@ -1,0 +1,55 @@
+# ARM64 is additive; x86-64 build/run targets remain available.
+ARM_BOOTLOADER := build/limine-arm64/BOOTAA64.EFI
+ARM_BOOT_IMAGE := cronk-arm64-boot.img
+ARM_DATA_DISK ?= cronk-arm64-data.img
+ARM_FIRMWARE ?= $(firstword $(wildcard /opt/homebrew/share/qemu/edk2-aarch64-code.fd /usr/share/qemu/edk2-aarch64-code.fd /usr/share/qemu-efi-aarch64/QEMU_EFI.fd))
+ifeq ($(shell uname -sm),Darwin arm64)
+ARM_ACCEL ?= hvf
+else
+ARM_ACCEL ?= tcg
+endif
+ifeq ($(ARM_ACCEL),tcg)
+ARM_CPU ?= cortex-a72
+else
+ARM_CPU ?= host
+endif
+ARM_QEMU_FLAGS ?= -m 2G -smp 1
+ARM_RESOLUTION ?= 3840x2160
+ARM_DEVICES = -device ramfb -fw_cfg name=opt/org.cronk/resolution,string=$(ARM_RESOLUTION) \
+    -global virtio-mmio.force-legacy=false \
+    -drive if=none,id=armboot,format=raw,file=$(ARM_BOOT_IMAGE),readonly=on \
+    -device virtio-blk-pci,drive=armboot,bootindex=0,romfile= \
+    -drive if=none,id=armdata,format=raw,file=$(ARM_DATA_DISK) \
+    -device virtio-blk-device,drive=armdata -device virtio-keyboard-device
+
+.PHONY: arm64 kernel-arm64 run-arm64 run-arm64-fullscreen
+arm64: $(ARM_BOOT_IMAGE)
+kernel-arm64: kernel/.deps-obtained
+	$(MAKE) -C kernel -f GNUmakefile.aarch64
+$(ARM_BOOTLOADER): tools/fetch_arm_bootloader.py
+	python3 tools/fetch_arm_bootloader.py
+$(ARM_BOOT_IMAGE): kernel-arm64 limine-arm64.conf $(ARM_BOOTLOADER)
+	mkdir -p arm64_boot_root/EFI/BOOT arm64_boot_root/boot/limine
+	cp $(ARM_BOOTLOADER) arm64_boot_root/EFI/BOOT/
+	cp kernel/bin/aarch64/kernel kernel/bin/aarch64/hello.cronk kernel/bin/aarch64/counter.cronk kernel/bin/aarch64/crash.cronk arm64_boot_root/boot/
+	cp limine-arm64.conf arm64_boot_root/boot/limine/limine.conf
+	@set -e; tmp=$$(mktemp "$(ARM_BOOT_IMAGE).XXXXXX"); trap 'rm -f "$$tmp"' EXIT; \
+		dd if=/dev/zero of="$$tmp" bs=1M count=64 2>/dev/null; \
+		mformat -i "$$tmp" -F ::; \
+		mcopy -s -i "$$tmp" arm64_boot_root/EFI arm64_boot_root/boot ::/; \
+		mv -f "$$tmp" $(ARM_BOOT_IMAGE)
+$(ARM_DATA_DISK):
+	python3 tools/storage_image.py "$@"
+.PHONY: prepare-arm64-data
+prepare-arm64-data: $(ARM_DATA_DISK)
+	python3 tools/storage_image.py "$(ARM_DATA_DISK)"
+run-arm64: $(ARM_BOOT_IMAGE) prepare-arm64-data
+	@test -n "$(ARM_FIRMWARE)" || { echo 'Set ARM_FIRMWARE to an AArch64 EDK2 firmware image'; exit 1; }
+	qemu-system-aarch64 -machine virt,gic-version=2,virtualization=off -accel $(ARM_ACCEL) -cpu $(ARM_CPU) \
+		-bios "$(ARM_FIRMWARE)" $(ARM_DEVICES) $(ARM_QEMU_FLAGS)
+ifeq ($(shell uname -s),Darwin)
+run-arm64-fullscreen: override ARM_QEMU_FLAGS += -display cocoa,full-screen=on,zoom-to-fit=on
+else
+run-arm64-fullscreen: override ARM_QEMU_FLAGS += -full-screen
+endif
+run-arm64-fullscreen: run-arm64

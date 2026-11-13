@@ -53,7 +53,7 @@ void memory_view(struct limine_framebuffer *fb) {
         metric(fb, "Peak program allocation   ", s.peak_program);
         terminal_write(fb, "\nManaged page ");
         if (page) {
-            static const char *const names[] = {"free", "allocator metadata", "program code", "stack"};
+            static const char *const names[] = {"free", "allocator metadata", "program code", "stack", "buffer", "device DMA", "display"};
             number(fb, index + 1, 10, 1);
             terminal_write(fb, " / ");
             number(fb, s.managed, 10, 1);

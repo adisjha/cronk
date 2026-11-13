@@ -1,6 +1,7 @@
 #include "files.h"
+#include "extentfs.h"
 #include "program/program.h"
-#include "ata.h"
+#include "block.h"
 #include "lib/memory.h"
 #include "term/terminal.h"
 
@@ -10,6 +11,7 @@ struct record {
     char text[480];
 };
 _Static_assert(sizeof(struct record) == 512, "one record per sector");
+static struct record directory_records[FILE_SLOTS];
 
 // Legacy text records end with zero. Binary records reserve the final three
 // bytes for a little-endian payload length and a type tag.
@@ -17,17 +19,25 @@ _Static_assert(sizeof(struct record) == 512, "one record per sector");
 #define BINARY_TAG 1
 
 void files_install_program(const char *name, unsigned marker, const void *data, size_t size) {
+    if(extentfs_active()){extentfs_install(name,marker,data,size);return;}
     unsigned char header[512];
-    if (!ata_read(0, header) || memcmp(header, "CRONKFS1", 8) || header[marker] ||
-        size > BINARY_CAPACITY || size <= 8 || memcmp(data, "CRONK001", 8)) return;
+    if (!disk_read(0, header) || memcmp(header, "CRONKFS1", 8) || header[marker] ||
+        size > BINARY_CAPACITY || size <= 8 || memcmp(data,
+#if defined(__aarch64__)
+        "CRONKA64",
+#else
+        "CRONK001",
+#endif
+        8)) return;
     size_t name_size = 1;
     while (name[name_size - 1]) ++name_size;
     if (name_size > 32) return;
     struct record record;
+    if (!disk_read_many(1, FILE_SLOTS, directory_records)) return;
     unsigned empty = 0;
     bool exists = false;
     for (unsigned slot = 1; slot <= FILE_SLOTS; ++slot) {
-        if (!ata_read(slot, &record)) return;
+        record = directory_records[slot - 1];
         if ((uint8_t)record.text[479] / 3 == 0 && !memcmp(record.name, name, name_size)) {
             exists = true;
             break;
@@ -42,12 +52,12 @@ void files_install_program(const char *name, unsigned marker, const void *data, 
         record.text[477] = size & 255;
         record.text[478] = size >> 8;
         record.text[479] = BINARY_TAG;
-        if (!ata_write(empty, &record)) return;
+        if (!disk_write(empty, &record)) return;
     }
     // Mark installation complete only after the record is durable. Deleting
     // the file later must survive a reboot.
     header[marker] = 1;
-    ata_write(0, header);
+    disk_write(0, header);
 }
 
 // The final byte encodes parent slot * 3 + kind. Old text and executable
@@ -59,13 +69,14 @@ static struct node {
 } nodes[FILE_SLOTS + 1];
 static unsigned cwd;
 
-unsigned files_cwd(void) { return cwd; }
+unsigned files_cwd(void) { return extentfs_active()?extentfs_cwd():cwd; }
 
 static bool load_directory(void) {
     struct record r;
-    if (!ata_read(0, &r) || memcmp(&r, "CRONKFS1", 8)) return false;
+    if (!disk_read(0, &r) || memcmp(&r, "CRONKFS1", 8)) return false;
+    if (!disk_read_many(1, FILE_SLOTS, directory_records)) return false;
     for (unsigned i = 1; i <= FILE_SLOTS; ++i) {
-        if (!ata_read(i, &r)) return false;
+        r = directory_records[i - 1];
         struct node *n = &nodes[i];
         memcpy(n->name, r.name, sizeof(n->name));
         if (!n->name[0]) continue;
@@ -86,6 +97,7 @@ static bool load_directory(void) {
 }
 
 int files_directory(unsigned dir, struct file_item items[FILE_SLOTS], unsigned *parent) {
+    if(extentfs_active())return extentfs_directory(dir,items,parent);
     if (!load_directory()) return -1;
     *parent = nodes[dir].parent;
     int count = 0;
@@ -100,6 +112,7 @@ int files_directory(unsigned dir, struct file_item items[FILE_SLOTS], unsigned *
 }
 
 void files_print_path(struct limine_framebuffer *fb, unsigned dir) {
+    if(extentfs_active()){extentfs_print_path(fb,dir);return;}
     unsigned chain[FILE_SLOTS], length = 0;
     while (dir) { chain[length++] = dir; dir = nodes[dir].parent; }
     terminal_putchar(fb, '/');
@@ -158,6 +171,7 @@ static const char *text_path(const char *name, struct path *path) {
 }
 
 const char *files_text_load(const char *name, char text[FILE_TEXT_MAX + 1], size_t *size) {
+    if(extentfs_active())return extentfs_load(name,text,size);
     struct path path = {0};
     const char *error = text_path(name, &path);
     if (error) return error;
@@ -165,15 +179,16 @@ const char *files_text_load(const char *name, char text[FILE_TEXT_MAX + 1], size
     text[0] = 0;
     if (path.slot == MISSING) return NULL;
     struct record r;
-    if (!ata_read(path.slot, &r)) return "disk I/O error";
-    while (*size < FILE_TEXT_MAX && r.text[*size]) ++*size;
+    if (!disk_read(path.slot, &r)) return "disk I/O error";
+    while (*size < 479 && r.text[*size]) ++*size;
     memcpy(text, r.text, *size);
     text[*size] = 0;
     return NULL;
 }
 
 const char *files_text_save(const char *name, const char *text, size_t size) {
-    if (size > FILE_TEXT_MAX) return "file too large";
+    if(extentfs_active())return extentfs_save(name,text,size);
+    if (size > 479) return "legacy disk: upgrade to CRONKFS2 for larger files";
     struct path path = {0};
     const char *error = text_path(name, &path);
     if (error) return error;
@@ -186,12 +201,13 @@ const char *files_text_save(const char *name, const char *text, size_t size) {
     memcpy(r.name, path.leaf, sizeof(r.name));
     memcpy(r.text, text, size);
     r.text[479] = (char)(path.parent * 3 + TEXT_FILE);
-    return ata_write(slot, &r) ? NULL : "disk I/O error";
+    return disk_write(slot, &r) ? NULL : "disk I/O error";
 }
 
 void files_preview(struct limine_framebuffer *fb, unsigned slot) {
+    if(extentfs_active()){extentfs_preview(fb,slot);return;}
     struct record r;
-    if (!ata_read(slot, &r)) terminal_write(fb, "disk I/O error\n");
+    if (!disk_read(slot, &r)) terminal_write(fb, "disk I/O error\n");
     else print_text(fb, &r);
 }
 
@@ -250,7 +266,7 @@ static const char *operate(struct limine_framebuffer *fb, enum file_action actio
                 if (ancestor == slot) return "cannot move folder inside itself";
         }
         struct record r;
-        if (!ata_read(slot, &r)) return "disk I/O error";
+        if (!disk_read(slot, &r)) return "disk I/O error";
         memcpy(r.name, dest.leaf, 32);
         r.text[479] = dest.parent * 3 + nodes[slot].kind;
         unsigned target = slot;
@@ -258,7 +274,7 @@ static const char *operate(struct limine_framebuffer *fb, enum file_action actio
             for (target = 1; target <= FILE_SLOTS && nodes[target].name[0]; ++target) {}
             if (target > FILE_SLOTS) return "disk full";
         }
-        return ata_write(target, &r) ? (action == FILE_COPY ? "copied" : "moved") : "disk I/O error";
+        return disk_write(target, &r) ? (action == FILE_COPY ? "copied" : "moved") : "disk I/O error";
     }
     if (action == FILE_WRITE || action == FILE_MKDIR) {
         if (action == FILE_MKDIR && slot != MISSING) return "already exists";
@@ -276,7 +292,7 @@ static const char *operate(struct limine_framebuffer *fb, enum file_action actio
             memcpy(r.text, text, n);
         }
         r.text[479] = (char)(path.parent * 3 + (action == FILE_MKDIR ? FOLDER : TEXT_FILE));
-        if (!ata_write(slot, &r)) return "disk I/O error";
+        if (!disk_write(slot, &r)) return "disk I/O error";
         return action == FILE_MKDIR ? "folder created" : "saved";
     }
     if (slot == MISSING) return "path not found";
@@ -301,11 +317,11 @@ static const char *operate(struct limine_framebuffer *fb, enum file_action actio
                 if (nodes[i].name[0] && nodes[i].parent == slot) return "folder is not empty";
         }
         struct record empty = {0};
-        return ata_write(slot, &empty) ? "removed" : "disk I/O error";
+        return disk_write(slot, &empty) ? "removed" : "disk I/O error";
     }
     if (folder) return "is a folder";
     struct record r;
-    if (!ata_read(slot, &r)) return "disk I/O error";
+    if (!disk_read(slot, &r)) return "disk I/O error";
     if (action == FILE_READ) {
         if (nodes[slot].kind == EXEC_FILE) return "binary file";
         print_text(fb, &r);
@@ -318,6 +334,7 @@ static const char *operate(struct limine_framebuffer *fb, enum file_action actio
 }
 
 void files_command(struct limine_framebuffer *fb, enum file_action action, char *args) {
+    if(extentfs_active()){extentfs_command(fb,action,args);return;}
     const char *message = operate(fb, action, args);
     if (message) {
         terminal_write(fb, message);

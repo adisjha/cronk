@@ -1,4 +1,6 @@
 #include "terminal.h"
+#include "sched/service.h"
+#include "arch/cpu.h"
 #include "lib/memory.h"
 #include "sched/scheduler.h"
 #include "gfx/framebuffer.h"
@@ -20,9 +22,8 @@ static enum terminal_tab active_tab;
 static unsigned displayed_minute = 24 * 60;
 
 bool terminal_tick(struct limine_framebuffer *fb, struct clock_sample *sample) {
-    scheduler_reap();
     struct clock_sample now;
-    if (!clock_read(&now)) return false;
+    if (!system_clock_read(&now)) return false;
     if (sample) *sample = now;
     unsigned minute = now.hour * 60 + now.minute;
     size_t width = 5 * FONT_WIDTH;
@@ -110,6 +111,7 @@ void terminal_putchar(struct limine_framebuffer *fb, char c){
         return;
     }
 
+    arch_serial_putc(c);
     if (active_tab == TAB_SHELL) {
         history[(history_start + history_length) % HISTORY_SIZE] = c;
         if (history_length == HISTORY_SIZE) history_start = (history_start + 1) % HISTORY_SIZE;
@@ -135,7 +137,7 @@ void terminal_putchar(struct limine_framebuffer *fb, char c){
             // Move upward, including any scanline padding.
             void *dst = body;
             const void *src = body + stride;
-            asm volatile("cld; rep movsb" : "+D"(dst), "+S"(src), "+c"(bytes) :: "memory");
+            memmove(dst, src, bytes);
         }
         term_row = rows ? rows - 1 : 0;
         draw_rect(fb, 0, MENUBAR_H + term_row * h, ui_width(fb), h, TERM_BG);

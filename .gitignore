@@ -5,3 +5,12 @@
 .DS_Store
 *.swp
 /cronk-data.img
+/cronk-arm64-boot.img
+/cronk-arm64-data.img
+/arm64_boot_root/
+/tests/__pycache__/
+
+/build/
+
+# Preserved pre-upgrade data disk images
+*.img.v1*.bak

@@ -1,0 +1,31 @@
+.SUFFIXES:
+ARM_CC ?= clang
+ARM_LD ?= $(or $(shell command -v ld.lld 2>/dev/null),/opt/homebrew/opt/lld/bin/ld.lld)
+ARM_OBJCOPY ?= $(or $(shell command -v llvm-objcopy 2>/dev/null),/opt/homebrew/opt/llvm/bin/llvm-objcopy)
+ARM_CFLAGS := --target=aarch64-none-elf -g -O2 -Wall -Wextra -std=gnu11 \
+    -nostdinc -ffreestanding -fno-builtin -fno-stack-protector -fno-stack-check \
+    -fno-lto -fno-pic -ffunction-sections -fdata-sections -mgeneral-regs-only \
+    -mno-outline-atomics -march=armv8-a -mcmodel=large
+ARM_CPPFLAGS := -I src -I limine-protocol/include -isystem freestnd-c-hdrs/include -MMD -MP
+SOURCES := $(shell find src cc-runtime/src -name '*.c' -o -name '*.S')
+EXCLUDE := src/arch/x86_64/% src/drivers/keyboard/keyboard.c src/storage/ata.c \
+    src/storage/virtio.c src/sched/timer.S src/program/enter.S
+SOURCES := $(filter-out $(EXCLUDE),$(SOURCES))
+OBJECTS := $(addprefix obj/aarch64/,$(addsuffix .o,$(SOURCES)))
+.PHONY: all
+all: bin/aarch64/kernel bin/aarch64/hello.cronk bin/aarch64/counter.cronk bin/aarch64/crash.cronk
+-include $(OBJECTS:.o=.d)
+bin/aarch64/kernel: $(OBJECTS) linker-scripts/aarch64.lds GNUmakefile.aarch64
+	mkdir -p $(@D)
+	$(ARM_LD) -m aarch64elf -nostdlib -static --gc-sections -z max-page-size=0x1000 -T linker-scripts/aarch64.lds $(OBJECTS) -o $@
+obj/aarch64/%.c.o: %.c GNUmakefile.aarch64
+	mkdir -p $(@D)
+	$(ARM_CC) $(ARM_CFLAGS) $(ARM_CPPFLAGS) -c $< -o $@
+obj/aarch64/%.S.o: %.S GNUmakefile.aarch64
+	mkdir -p $(@D)
+	$(ARM_CC) $(ARM_CFLAGS) $(ARM_CPPFLAGS) -c $< -o $@
+bin/aarch64/%.cronk: ../programs/aarch64/%.S GNUmakefile.aarch64
+	mkdir -p $(@D) obj/aarch64/programs
+	$(ARM_CC) $(ARM_CFLAGS) -c $< -o obj/aarch64/programs/$*.o
+	$(ARM_LD) -m aarch64elf --image-base=0 -Ttext=0 -e $*_entry obj/aarch64/programs/$*.o -o obj/aarch64/programs/$*.elf
+	$(ARM_OBJCOPY) -O binary --only-section=.text obj/aarch64/programs/$*.elf $@

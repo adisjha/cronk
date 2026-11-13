@@ -12,7 +12,7 @@ static volatile struct limine_executable_address_request kernel_address = {
 // A private low-half translation tree per program. All upper-half kernel
 // mappings are shared, with U/S cleared at the root of each tree.
 static uint64_t tables[TASK_SLOTS][5][512] __attribute__((aligned(4096)));
-static uintptr_t kernel_root;
+static uintptr_t kernel_root, kernel_virtual, kernel_physical;
 static unsigned levels;
 static struct user_space *active;
 static uint64_t gdt[20];
@@ -26,6 +26,8 @@ extern unsigned user_enter(uintptr_t *resume, void *rsp0);
 extern void user_leave(uintptr_t resume, unsigned fault) __attribute__((noreturn));
 
 void user_cpu_init(void) {
+    kernel_virtual=kernel_address.response->virtual_base;
+    kernel_physical=kernel_address.response->physical_base;
     uintptr_t cr4;
     asm volatile("mov %%cr3,%0" : "=r"(kernel_root));
     asm volatile("mov %%cr4,%0" : "=r"(cr4));
@@ -52,8 +54,7 @@ void user_cpu_init(void) {
 }
 
 static uintptr_t table_phys(void *p) {
-    return (uintptr_t)p - kernel_address.response->virtual_base +
-           kernel_address.response->physical_base;
+    return (uintptr_t)p - kernel_virtual + kernel_physical;
 }
 
 void user_space_init(struct user_space *s, unsigned slot) {

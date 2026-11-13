@@ -1,7 +1,9 @@
 #include "clock_view.h"
+#include "sched/service.h"
+#include "arch/cpu.h"
 #include "analog_clock.h"
 #include "terminal.h"
-#include "arch/x86_64/clock.h"
+#include "arch/clock.h"
 #include "drivers/keyboard/keyboard.h"
 #include "gfx/framebuffer.h"
 
@@ -33,7 +35,7 @@ void clock_view(struct limine_framebuffer *fb) {
         if (key == KEY_ESC || key == 'q') break;
         struct clock_sample t;
         if (!terminal_tick(fb, &t) || (last_ms == t.millisecond && last_second == t.second)) {
-            asm volatile("pause");
+            arch_pause();
             continue;
         }
         if (last_second != t.second) {

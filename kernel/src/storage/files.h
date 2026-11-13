@@ -17,7 +17,7 @@ int files_directory(unsigned dir, struct file_item items[FILE_SLOTS], unsigned *
 void files_print_path(struct limine_framebuffer *fb, unsigned dir);
 void files_preview(struct limine_framebuffer *fb, unsigned slot);
 
-#define FILE_TEXT_MAX 479
+#define FILE_TEXT_MAX 65535
 // A missing file opens as an empty buffer; disk changes happen only on save.
 const char *files_text_load(const char *path, char text[FILE_TEXT_MAX + 1], size_t *size);
 const char *files_text_save(const char *path, const char *text, size_t size);

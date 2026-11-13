@@ -1,5 +1,8 @@
 #include "gfx/framebuffer.h"
 #include "shell.h"
+#include "format.h"
+#include "mm/pages.h"
+#include "arch/cpu.h"
 #include "editor.h"
 #include "sched/benchmark.h"
 #include "sched/hardware_benchmark.h"
@@ -10,7 +13,7 @@
 #include "drivers/keyboard/keyboard.h"
 #include <stddef.h>
 
-#define INPUT_MAX 256
+#define INPUT_MAX (FILE_TEXT_MAX + 128)
 
 static int streq(const char *a, const char *b) {
     while (*a && *b){
@@ -31,6 +34,15 @@ static void worker(void *unused) {
     (void)unused;
     // The demo wakes once per second.
     for (;;) scheduler_sleep(100);
+}
+
+static void busy_worker(void *unused) {
+    (void)unused;
+    unsigned value=1;
+    for(;;) {
+        for(unsigned i=0;i<1000000;++i){value^=value<<13;value^=value>>17;value^=value<<5;}
+        char text[32];format_uint(text,value);scheduler_output(NULL,text);
+    }
 }
 
 static unsigned parse_id(const char *text) {
@@ -84,13 +96,13 @@ static void shell_execute(struct limine_framebuffer *fb, char *cmd){
     } else if (starts_with(cmd, "cat ")) {
         files_command(fb, FILE_READ, cmd + 4);
     } else if (streq(cmd, "edit") || starts_with(cmd, "edit ")) {
-        editor_open(fb, cmd + 4);
+        desktop_edit(fb, cmd + 4);
     } else if (starts_with(cmd, "write ")) {
         files_command(fb, FILE_WRITE, cmd + 6);
     } else if (starts_with(cmd, "rm ")) {
         files_command(fb, FILE_REMOVE, cmd + 3);
     } else if (streq(cmd, "ps")) {
-        terminal_write(fb, "ID   RING   TASK   SLICES   LAST OUTPUT\n");
+        terminal_write(fb, "ID   LEVEL  TASK   SLICES   RAM KiB   RUNTIME   CORE   LAST OUTPUT\n");
         for (unsigned i = 0; i < TASK_SLOTS; ++i) {
             struct task_info info;
             if (!scheduler_info(i, &info)) continue;
@@ -102,13 +114,20 @@ static void shell_execute(struct limine_framebuffer *fb, char *cmd){
             terminal_write(fb, "   ");
             terminal_write_uint(fb, info.slices);
             terminal_write(fb, "   ");
+            terminal_write_uint(fb, (info.ram_bytes + 1023) / 1024);
+            terminal_write(fb, "   ");
+            terminal_write_uint(fb, info.runtime);
+            terminal_write(fb, "   ");
+            terminal_write_uint(fb, info.cpu);
+            terminal_write(fb, "   ");
             terminal_write(fb, info.output);
             terminal_putchar(fb, '\n');
         }
-    } else if (streq(cmd, "spawn")) {
-        unsigned id = scheduler_spawn("worker", worker, NULL, NULL);
+    } else if (streq(cmd, "spawn") || streq(cmd,"spawn busy")) {
+        bool busy=streq(cmd,"spawn busy");
+        unsigned id = scheduler_spawn(busy?"cpu worker":"worker", busy?busy_worker:worker, NULL, NULL);
         if (id) {
-            terminal_write(fb, "started worker ");
+            terminal_write(fb, busy?"started cpu worker ":"started worker ");
             terminal_write_uint(fb, id);
             terminal_putchar(fb, '\n');
         } else terminal_write(fb, "task table full\n");
@@ -118,8 +137,14 @@ static void shell_execute(struct limine_framebuffer *fb, char *cmd){
         hardware_benchmark(fb, BENCH_CPU);
     } else if (streq(cmd, "bench ram")) {
         hardware_benchmark(fb, BENCH_RAM);
+    } else if (starts_with(cmd, "bench ram ")) {
+        hardware_ram_benchmark(fb, cmd + 10);
+    } else if (streq(cmd, "bench caches") || streq(cmd, "bench cache")) {
+        hardware_benchmark(fb, BENCH_CACHES);
     } else if (streq(cmd, "bench disk")) {
         hardware_benchmark(fb, BENCH_DISK);
+    } else if (streq(cmd, "bench parallel")) {
+        scheduler_parallel_benchmark(fb);
     } else if (streq(cmd, "bench sched")) {
         scheduler_benchmark(fb);
     } else if (streq(cmd, "uptime")) {
@@ -146,7 +171,9 @@ static void shell_execute(struct limine_framebuffer *fb, char *cmd){
 }
 
 void shell_run(struct limine_framebuffer *fb) {
-    char input_buf[INPUT_MAX];
+    char *input_buf = pages_alloc((INPUT_MAX+4095)/4096,PAGE_BUFFER);
+    if(!input_buf){terminal_write(fb,"unable to allocate shell input\n");for(;;)scheduler_sleep(100);}
+    scheduler_charge_current_memory(((INPUT_MAX+4095)/4096)*PAGE_SIZE);
     size_t input_len = 0;
     terminal_write(fb, "> ");
     terminal_draw_cursor(fb);
